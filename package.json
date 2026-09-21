@@ -1,0 +1,14 @@
+{
+  "name": "vocab-extend-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --filter @vocab-extend/shared build && pnpm --filter @vocab-extend/extension build",
+    "dev": "pnpm --filter @vocab-extend/extension dev",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

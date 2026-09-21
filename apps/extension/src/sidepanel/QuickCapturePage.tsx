@@ -31,6 +31,7 @@ export const QuickCapturePage: React.FC = () => {
   const currentWord = watch("word");
   const pronunciations = watch("pronunciations");
   const types = watch("types");
+  const audio = watch("audio");
 
   // Load pending capture from storage or listener
   useEffect(() => {
@@ -218,6 +219,31 @@ export const QuickCapturePage: React.FC = () => {
                   {p.variants.map((v) => v.ipa).join(" ")}
                 </span>
               ))}
+              {audio?.map((a, idx) =>
+                a.url ? (
+                  <button
+                    key={`audio-${idx}`}
+                    type="button"
+                    title={`Nghe phát âm ${a.dialect || ""}`}
+                    onClick={() => {
+                      const sound = new Audio(a.url);
+                      sound.play().catch((err) => console.warn("Lỗi phát audio", err));
+                    }}
+                    style={{
+                      background: "#f0fdf4",
+                      color: "#166534",
+                      border: "1px solid #bbf7d0",
+                      borderRadius: "4px",
+                      padding: "2px 8px",
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    🔊 {a.dialect || "Audio"}
+                  </button>
+                ) : null
+              )}
             </div>
           )}
         </div>

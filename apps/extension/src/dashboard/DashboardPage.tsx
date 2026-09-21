@@ -222,6 +222,31 @@ export const DashboardPage: React.FC = () => {
                         {p.dialect ? `[${p.dialect}] ` : ""}{p.variants.map((v) => v.ipa).join(" ")}
                       </span>
                     ))}
+                    {entry.audio?.map((a, idx) =>
+                      a.url ? (
+                        <button
+                          key={`dash-audio-${idx}`}
+                          type="button"
+                          title={`Nghe phát âm ${a.dialect || ""}`}
+                          onClick={() => {
+                            const sound = new Audio(a.url);
+                            sound.play().catch((err) => console.warn("Lỗi phát audio", err));
+                          }}
+                          style={{
+                            background: "#f0fdf4",
+                            color: "#166534",
+                            border: "1px solid #bbf7d0",
+                            borderRadius: "4px",
+                            padding: "1px 6px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          🔊 {a.dialect || "Audio"}
+                        </button>
+                      ) : null
+                    )}
                     <span
                       style={{
                         marginLeft: "auto",

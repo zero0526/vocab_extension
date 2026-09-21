@@ -3,6 +3,7 @@ import type { VocabularyEntry } from "@vocab-extend/shared";
 import { vocabularyRepository } from "../db/vocabulary.repository";
 import { ankiClient } from "../services/anki/anki-client";
 import { getLocalDateKey, formatDateDisplay } from "../utils/date";
+import { playAudioResource } from "../utils/audio";
 
 export const DashboardPage: React.FC = () => {
   const [dateKey, setDateKey] = useState<string>(getLocalDateKey());
@@ -248,15 +249,12 @@ export const DashboardPage: React.FC = () => {
                       </span>
                     ))}
                     {entry.audio?.map((a, idx) =>
-                      a.url ? (
+                      a.url || a.base64 ? (
                         <button
                           key={`dash-audio-${idx}`}
                           type="button"
-                          title={`Nghe phát âm ${a.dialect || ""}`}
-                          onClick={() => {
-                            const sound = new Audio(a.url);
-                            sound.play().catch((err) => console.warn("Lỗi phát audio", err));
-                          }}
+                          title={`Nghe phát âm ${a.dialect || ""}${a.base64 ? " (Đã cache offline)" : ""}`}
+                          onClick={() => playAudioResource(a)}
                           style={{
                             background: "#f0fdf4",
                             color: "#166534",
@@ -268,7 +266,7 @@ export const DashboardPage: React.FC = () => {
                             cursor: "pointer",
                           }}
                         >
-                          🔊 {a.dialect || "Audio"}
+                          🔊 {a.dialect || "Audio"}{a.base64 ? " ⚡" : ""}
                         </button>
                       ) : null
                     )}

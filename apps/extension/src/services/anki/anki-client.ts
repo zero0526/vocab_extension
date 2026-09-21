@@ -62,9 +62,48 @@ export class AnkiClient {
   }
 
   /**
+   * Tải và nạp các file audio của từ vựng vào kho lưu trữ media của Anki
+   */
+  async uploadMediaFilesForEntry(entry: VocabularyEntry): Promise<string[]> {
+    const soundTags: string[] = [];
+
+    for (const a of entry.audio) {
+      if (!a.url && !a.base64) continue;
+      const dialect = (a.dialect || "audio").toLowerCase();
+      const safeWord = entry.normalizedWord.replace(/[^a-z0-9]/g, "_");
+      const filename = a.filename || `vocab_${safeWord}_${dialect}.mp3`;
+
+      try {
+        if (a.base64) {
+          const rawBase64 = a.base64.includes(",") ? a.base64.split(",")[1] : a.base64;
+          await this.invoke("storeMediaFile", {
+            filename,
+            data: rawBase64,
+          });
+          soundTags.push(`[sound:${filename}]`);
+        } else if (a.url) {
+          await this.invoke("storeMediaFile", {
+            filename,
+            url: a.url,
+          });
+          soundTags.push(`[sound:${filename}]`);
+        }
+      } catch (err) {
+        console.warn(`Lỗi nạp audio ${filename} vào Anki:`, err);
+      }
+    }
+
+    return soundTags;
+  }
+
+  /**
    * Convert VocabularyEntry to standard Anki Note fields
    */
-  buildNoteFields(entry: VocabularyEntry, availableFields: string[]): Record<string, string> {
+  buildNoteFields(
+    entry: VocabularyEntry,
+    availableFields: string[],
+    soundTags: string[] = []
+  ): Record<string, string> {
     const pos = entry.types.map((t) => t.name).join(", ");
     const ipa = entry.pronunciations
       .map((p) => `${p.dialect ? `[${p.dialect}] ` : ""}${p.variants.map((v) => v.ipa).join(" ")}`)
@@ -79,10 +118,12 @@ export class AnkiClient {
       .join("");
 
     const memoryHtml = entry.memory ? `<div>💡 <i>${entry.memory}</i></div>` : "";
+    const soundTagsHtml = soundTags.length > 0 ? `<div>${soundTags.join(" ")}</div>` : "";
 
     const fullBack = [
       ipa ? `<div style="color: #6366f1;">${ipa}</div>` : "",
       pos ? `<div style="color: #64748b; font-style: italic;">${pos}</div>` : "",
+      soundTagsHtml,
       meaningsHtml ? `<div style="margin-top: 8px;">${meaningsHtml}</div>` : "",
       examplesHtml ? `<div style="margin-top: 8px;">${examplesHtml}</div>` : "",
       memoryHtml ? `<div style="margin-top: 8px;">${memoryHtml}</div>` : "",
@@ -102,8 +143,18 @@ export class AnkiClient {
         else if (lower.includes("meaning") || lower.includes("back")) fieldMap[f] = fullBack;
         else if (lower.includes("ipa") || lower.includes("phonetic")) fieldMap[f] = ipa;
         else if (lower.includes("example")) fieldMap[f] = examplesHtml;
+        else if (lower.includes("audio") || lower.includes("sound")) fieldMap[f] = soundTags.join(" ");
         else fieldMap[f] = "";
       }
+    }
+
+    // Gán trường Audio riêng nếu model có hỗ trợ
+    const dedicatedAudioField = availableFields.find((f) => {
+      const lower = f.toLowerCase();
+      return lower.includes("audio") || lower.includes("sound") || lower.includes("pronunciation");
+    });
+    if (dedicatedAudioField && soundTags.length > 0) {
+      fieldMap[dedicatedAudioField] = soundTags.join(" ");
     }
 
     return fieldMap;
@@ -120,7 +171,10 @@ export class AnkiClient {
 
     for (const entry of entries) {
       const exportId = generateUUID();
-      const fields = this.buildNoteFields(entry, availableFields);
+
+      // Nạp media audio vào Anki trước
+      const soundTags = await this.uploadMediaFilesForEntry(entry);
+      const fields = this.buildNoteFields(entry, availableFields, soundTags);
 
       try {
         const noteId = await this.invoke<number>("addNote", {

@@ -10,6 +10,7 @@ import { cambridgeAuth } from "../services/dictionary/cambridge-auth";
 import { vocabularyRepository } from "../db/vocabulary.repository";
 import { generateUUID } from "../utils/text";
 import { getLocalDateKey } from "../utils/date";
+import { downloadAudioAsBase64, playAudioResource } from "../utils/audio";
 
 export const QuickCapturePage: React.FC = () => {
   const [loadingLookup, setLoadingLookup] = useState(false);
@@ -98,16 +99,40 @@ export const QuickCapturePage: React.FC = () => {
       const dictData = await dictionaryClient.lookup(word.trim());
       if (dictData.types.length > 0) setValue("types", dictData.types);
       if (dictData.pronunciations.length > 0) setValue("pronunciations", dictData.pronunciations);
-      if (dictData.audio.length > 0) setValue("audio", dictData.audio);
 
       // Pre-fill meanings with definitions from dictionary
       if (dictData.meanings.length > 0) {
         setValue("meanings", dictData.meanings);
       }
 
-      // Add Cambridge example if available
+      // Add examples if available
       if (dictData.examples.length > 0) {
         setValue("examples", dictData.examples);
+      }
+
+      // Tải ngầm file audio để lưu vào IndexedDB và nghe offline ngay lập tức
+      if (dictData.audio.length > 0) {
+        setValue("audio", dictData.audio);
+
+        Promise.all(
+          dictData.audio.map(async (a) => {
+            if (!a.url) return a;
+            try {
+              const { rawBase64 } = await downloadAudioAsBase64(a.url);
+              const safeWord = word.trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
+              const filename = `vocab_${safeWord}_${(a.dialect || "audio").toLowerCase()}.mp3`;
+              return {
+                ...a,
+                base64: rawBase64,
+                filename,
+              };
+            } catch {
+              return a;
+            }
+          })
+        ).then((downloaded) => {
+          setValue("audio", downloaded);
+        }).catch(() => {});
       }
     } catch (err) {
       setErrorMessage(
@@ -322,15 +347,12 @@ export const QuickCapturePage: React.FC = () => {
                 </span>
               ))}
               {audio?.map((a, idx) =>
-                a.url ? (
+                a.url || a.base64 ? (
                   <button
                     key={`audio-${idx}`}
                     type="button"
-                    title={`Nghe phát âm ${a.dialect || ""}`}
-                    onClick={() => {
-                      const sound = new Audio(a.url);
-                      sound.play().catch((err) => console.warn("Lỗi phát audio", err));
-                    }}
+                    title={`Nghe phát âm ${a.dialect || ""}${a.base64 ? " (Đã cache offline)" : ""}`}
+                    onClick={() => playAudioResource(a)}
                     style={{
                       background: "#f0fdf4",
                       color: "#166534",
@@ -342,7 +364,7 @@ export const QuickCapturePage: React.FC = () => {
                       cursor: "pointer",
                     }}
                   >
-                    🔊 {a.dialect || "Audio"}
+                    🔊 {a.dialect || "Audio"}{a.base64 ? " ⚡" : ""}
                   </button>
                 ) : null
               )}
@@ -513,14 +535,12 @@ export const QuickCapturePage: React.FC = () => {
                         {p.dialect ? `[${p.dialect}] ` : ""}{p.variants.map((v) => v.ipa).join(" ")}
                       </span>
                     ))}
-                    {item.audio?.map((a, i) => a.url && (
+                    {item.audio?.map((a, i) => (a.url || a.base64) && (
                       <button
                         key={i}
                         type="button"
-                        onClick={() => {
-                          const snd = new Audio(a.url);
-                          snd.play().catch(() => {});
-                        }}
+                        title={a.base64 ? "Đã cache offline" : ""}
+                        onClick={() => playAudioResource(a)}
                         style={{
                           border: "none",
                           background: "#f0fdf4",
@@ -531,7 +551,7 @@ export const QuickCapturePage: React.FC = () => {
                           cursor: "pointer"
                         }}
                       >
-                        🔊 {a.dialect || ""}
+                        🔊 {a.dialect || ""}{a.base64 ? " ⚡" : ""}
                       </button>
                     ))}
                   </div>

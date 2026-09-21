@@ -22,6 +22,8 @@ export type AudioResource = {
   dialect?: string;
   url?: string;
   source?: string;
+  base64?: string;
+  filename?: string;
 };
 
 export type Meaning = {

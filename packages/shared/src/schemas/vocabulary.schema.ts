@@ -24,6 +24,8 @@ export const audioResourceSchema = z.object({
   dialect: z.string().optional(),
   url: z.string().url().optional().or(z.literal("")),
   source: z.string().optional(),
+  base64: z.string().optional(),
+  filename: z.string().optional(),
 });
 
 export const meaningSchema = z.object({

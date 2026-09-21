@@ -124,6 +124,15 @@ export const QuickCapturePage: React.FC = () => {
 
     try {
       await saveVocabulary(data);
+
+      // Xóa khỏi hàng đợi lưu trữ tạm thời
+      if (typeof chrome !== "undefined" && chrome.storage?.local) {
+        await chrome.storage.local.remove(["pendingCapture"]);
+      }
+
+      // Dọn sạch form để sẵn sàng bắt từ tiếp theo
+      reset(createInitialFormData(""));
+
       setSaveSuccess(true);
       await loadTodayWords();
       setTimeout(() => setSaveSuccess(false), 4000);

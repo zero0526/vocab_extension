@@ -21,6 +21,12 @@ export const DashboardPage: React.FC = () => {
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState<{ success: number; failed: number } | null>(null);
 
+  // New Deck Creation State
+  const [isCreatingDeck, setIsCreatingDeck] = useState(false);
+  const [newDeckName, setNewDeckName] = useState("");
+  const [creatingDeckLoading, setCreatingDeckLoading] = useState(false);
+  const [deckCreationError, setDeckCreationError] = useState<string | null>(null);
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -90,6 +96,25 @@ export const DashboardPage: React.FC = () => {
       await loadData();
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleCreateDeck = async () => {
+    const trimmed = newDeckName.trim();
+    if (!trimmed) return;
+    setCreatingDeckLoading(true);
+    setDeckCreationError(null);
+    try {
+      await ankiClient.createDeck(trimmed);
+      const refreshedDecks = await ankiClient.getDeckNames().catch((): string[] => []);
+      setDecks(refreshedDecks);
+      setSelectedDeck(trimmed);
+      setNewDeckName("");
+      setIsCreatingDeck(false);
+    } catch (err) {
+      setDeckCreationError(err instanceof Error ? err.message : "Lỗi khi tạo deck");
+    } finally {
+      setCreatingDeckLoading(false);
     }
   };
 
@@ -343,9 +368,82 @@ export const DashboardPage: React.FC = () => {
             ) : ankiOnline === true ? (
               <div>
                 <div style={{ marginBottom: "14px" }}>
-                  <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
-                    Chọn Anki Deck:
-                  </label>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                    <label style={{ fontSize: "13px", fontWeight: 600 }}>
+                      Chọn Anki Deck:
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreatingDeck(!isCreatingDeck);
+                        setDeckCreationError(null);
+                      }}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "#4f46e5",
+                        fontSize: "12px",
+                        cursor: "pointer",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {isCreatingDeck ? "✕ Hủy" : "+ Tạo Deck mới"}
+                    </button>
+                  </div>
+
+                  {isCreatingDeck && (
+                    <div
+                      style={{
+                        background: "#f8fafc",
+                        padding: "8px",
+                        borderRadius: "6px",
+                        border: "1px solid #e2e8f0",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <input
+                          type="text"
+                          placeholder="VD: English::Technical, VocabExtend..."
+                          value={newDeckName}
+                          onChange={(e) => setNewDeckName(e.target.value)}
+                          style={{
+                            flex: 1,
+                            padding: "6px 8px",
+                            borderRadius: "4px",
+                            border: "1px solid #cbd5e1",
+                            fontSize: "13px",
+                          }}
+                        />
+                        <button
+                          type="button"
+                          disabled={creatingDeckLoading || !newDeckName.trim()}
+                          onClick={handleCreateDeck}
+                          style={{
+                            backgroundColor: "#4f46e5",
+                            color: "#ffffff",
+                            border: "none",
+                            borderRadius: "4px",
+                            padding: "6px 12px",
+                            fontSize: "12px",
+                            fontWeight: 600,
+                            cursor:
+                              creatingDeckLoading || !newDeckName.trim()
+                                ? "not-allowed"
+                                : "pointer",
+                          }}
+                        >
+                          {creatingDeckLoading ? "Đang tạo..." : "Tạo"}
+                        </button>
+                      </div>
+                      {deckCreationError && (
+                        <div style={{ color: "#ef4444", fontSize: "11px", marginTop: "4px" }}>
+                          ⚠️ {deckCreationError}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <select
                     value={selectedDeck}
                     onChange={(e) => setSelectedDeck(e.target.value)}

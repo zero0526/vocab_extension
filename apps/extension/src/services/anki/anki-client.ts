@@ -45,6 +45,14 @@ export class AnkiClient {
     return this.invoke<string[]>("deckNames");
   }
 
+  async createDeck(deck: string): Promise<number> {
+    const cleanDeck = deck.trim();
+    if (!cleanDeck) {
+      throw new Error("Tên deck không được để trống");
+    }
+    return this.invoke<number>("createDeck", { deck: cleanDeck });
+  }
+
   async getModelNames(): Promise<string[]> {
     return this.invoke<string[]>("modelNames");
   }

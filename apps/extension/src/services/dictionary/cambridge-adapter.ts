@@ -3,22 +3,22 @@ import { parseCambridgeHtml } from "./cambridge-parser";
 import { generateUUID } from "../../utils/text";
 import type { WordType, Pronunciation, AudioResource, Meaning, Example } from "@vocab-extend/shared";
 
-interface ApiPhonetic {
+export interface ApiPhonetic {
   text?: string;
   audio?: string;
 }
 
-interface ApiDefinition {
+export interface ApiDefinition {
   definition?: string;
   example?: string;
 }
 
-interface ApiMeaning {
+export interface ApiMeaning {
   partOfSpeech?: string;
   definitions?: ApiDefinition[];
 }
 
-interface ApiEntry {
+export interface ApiEntry {
   word?: string;
   phonetic?: string;
   phonetics?: ApiPhonetic[];
@@ -28,8 +28,8 @@ interface ApiEntry {
 export class CambridgeAdapter implements DictionaryClient {
   /**
    * Fetch dictionary entry.
-   * Primary: https://dictionary.cambridge.org/dictionary/english/<word>
-   * Fallback: High-speed open dictionary API if Cambridge is blocked by Cloudflare anti-bot challenge.
+   * Primary: https://api.dictionaryapi.dev/api/v2/entries/en/<word> (fast, no Cloudflare captcha, includes real audio mp3s)
+   * Fallback: https://dictionary.cambridge.org/dictionary/english/<word>
    */
   async lookup(word: string): Promise<DictionaryLookupResult> {
     const cleanWord = word.trim();
@@ -38,8 +38,22 @@ export class CambridgeAdapter implements DictionaryClient {
     }
 
     const cambridgeUrl = `https://dictionary.cambridge.org/dictionary/english/${encodeURIComponent(cleanWord.toLowerCase())}`;
+    const apiUrl = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord.toLowerCase())}`;
 
-    // 1. Try Cambridge Dictionary direct fetch with credentials: "include"
+    // 1. Primary: Dictionary API (High speed, reliable, no Cloudflare block)
+    try {
+      const res = await fetch(apiUrl);
+      if (res.ok) {
+        const data = (await res.json()) as ApiEntry[];
+        if (Array.isArray(data) && data.length > 0) {
+          return this.parseApiResponse(data[0], cleanWord, cambridgeUrl);
+        }
+      }
+    } catch (err) {
+      console.warn("Lỗi gọi Dictionary API, thử fallback sang Cambridge:", err);
+    }
+
+    // 2. Fallback: Direct Cambridge Dictionary fetch
     try {
       const res = await fetch(cambridgeUrl, {
         method: "GET",
@@ -52,7 +66,6 @@ export class CambridgeAdapter implements DictionaryClient {
 
       if (res.ok) {
         const htmlText = await res.text();
-        // Ensure not a Cloudflare challenge page
         if (
           htmlText.includes("headword") ||
           htmlText.includes("pron-block") ||
@@ -62,29 +75,15 @@ export class CambridgeAdapter implements DictionaryClient {
         }
       }
     } catch (err) {
-      console.warn("Direct Cambridge fetch blocked or failed, attempting fallback:", err);
-    }
-
-    // 2. High-speed Fallback API to guarantee data display (IPA, UK/US Audio, Definitions)
-    try {
-      const fallbackUrl = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord.toLowerCase())}`;
-      const res = await fetch(fallbackUrl);
-      if (res.ok) {
-        const data = (await res.json()) as ApiEntry[];
-        if (Array.isArray(data) && data.length > 0) {
-          return this.parseFallbackApiResponse(data[0], cleanWord, cambridgeUrl);
-        }
-      }
-    } catch (err) {
-      console.warn("Fallback dictionary API error:", err);
+      console.warn("Direct Cambridge fetch error:", err);
     }
 
     throw new Error(
-      `Không thể tải từ "${cleanWord}". Vui lòng kiểm tra kết nối mạng hoặc thử lại.`
+      `Không tìm thấy dữ liệu từ điển cho từ "${cleanWord}". Vui lòng kiểm tra lại chính tả hoặc nhập nghĩa thủ công.`
     );
   }
 
-  private parseFallbackApiResponse(
+  public parseApiResponse(
     item: ApiEntry,
     word: string,
     cambridgeUrl: string
@@ -105,7 +104,7 @@ export class CambridgeAdapter implements DictionaryClient {
           const isUs = p.audio.includes("-us") || p.audio.includes("/us/");
           const dialect = isUk ? "UK" : isUs ? "US" : audio.length === 0 ? "US" : undefined;
           if (dialect && !audio.some((a) => a.dialect === dialect)) {
-            audio.push({ dialect, url: p.audio, source: "Cambridge" });
+            audio.push({ dialect, url: p.audio, source: "DictionaryAPI" });
           }
         }
       }
@@ -138,7 +137,7 @@ export class CambridgeAdapter implements DictionaryClient {
               examples.push({
                 id: generateUUID(),
                 sentence: d.example,
-                source: "Cambridge Dictionary",
+                source: "Dictionary Examples",
                 sourceUrl: cambridgeUrl,
                 sourceType: "dictionary",
               });
@@ -156,7 +155,7 @@ export class CambridgeAdapter implements DictionaryClient {
       meanings,
       examples,
       source: {
-        dictionary: "Cambridge",
+        dictionary: "DictionaryAPI",
         url: cambridgeUrl,
       },
     };

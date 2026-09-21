@@ -18,11 +18,18 @@ export async function saveVocabulary(
     data.capture.dateKey
   );
 
+  const hasMeaning = data.meanings.some((m) => m.text.trim().length > 0);
+  const status: VocabularyStatus = existing?.status === "exported"
+    ? "exported"
+    : hasMeaning
+      ? "enriched"
+      : "captured";
+
   const entry: VocabularyEntry = {
     ...data,
     id: existing?.id ?? generateUUID(),
     normalizedWord: normalized,
-    status: (existing?.status === "exported" ? "exported" : "enriched") as VocabularyStatus,
+    status,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };

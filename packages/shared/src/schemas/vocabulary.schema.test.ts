@@ -18,7 +18,7 @@ describe("vocabularyFormSchema validation", () => {
     expect(res.success).toBe(false);
   });
 
-  it("requires at least one meaning", () => {
+  it("allows capturing draft word before enriching meanings", () => {
     const res = vocabularyFormSchema.safeParse({
       word: "reconcile",
       types: [],
@@ -31,7 +31,7 @@ describe("vocabularyFormSchema validation", () => {
         dateKey: "2026-09-22",
       },
     });
-    expect(res.success).toBe(false);
+    expect(res.success).toBe(true);
   });
 
   it("accepts valid vocabulary form data", () => {

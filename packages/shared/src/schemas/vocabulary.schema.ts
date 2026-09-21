@@ -28,14 +28,14 @@ export const audioResourceSchema = z.object({
 
 export const meaningSchema = z.object({
   id: z.string(),
-  text: z.string().trim().min(1, "Meaning is required"),
+  text: z.string().trim(),
   context: z.string().optional(),
   source: z.enum(["user", "dictionary"]).default("user"),
 });
 
 export const exampleSchema = z.object({
   id: z.string(),
-  sentence: z.string().trim().min(1, "Example sentence cannot be empty"),
+  sentence: z.string().trim(),
   translation: z.string().optional(),
   source: z.string().optional(),
   sourceUrl: z.string().url().optional().or(z.literal("")),
@@ -55,7 +55,7 @@ export const vocabularyFormSchema = z.object({
   types: z.array(wordTypeSchema).default([]),
   pronunciations: z.array(pronunciationSchema).default([]),
   audio: z.array(audioResourceSchema).default([]),
-  meanings: z.array(meaningSchema).min(1, "At least one meaning is required"),
+  meanings: z.array(meaningSchema).default([]),
   examples: z.array(exampleSchema).default([]),
   memory: z.string().optional(),
   source: z

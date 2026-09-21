@@ -1,15 +1,15 @@
 import React from "react";
-import { useFieldArray, type Control, type UseFormRegister } from "react-hook-form";
+import { useFieldArray, type Control, type UseFormRegister, type FieldErrors } from "react-hook-form";
 import type { VocabularyFormData } from "@vocab-extend/shared";
 import { generateUUID } from "../../utils/text";
 
 interface Props {
   control: Control<VocabularyFormData>;
   register: UseFormRegister<VocabularyFormData>;
-  errors?: Record<string, unknown>;
+  errors?: FieldErrors<VocabularyFormData>;
 }
 
-export const MeaningEditor: React.FC<Props> = ({ control, register }) => {
+export const MeaningEditor: React.FC<Props> = ({ control, register, errors }) => {
   const { fields, append, remove } = useFieldArray({
     control,
     name: "meanings",
@@ -19,7 +19,7 @@ export const MeaningEditor: React.FC<Props> = ({ control, register }) => {
     <div style={{ marginBottom: "16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
         <label style={{ fontWeight: 600, fontSize: "14px", color: "#1e293b" }}>
-          Nghĩa tiếng Việt <span style={{ color: "#ef4444" }}>*</span>
+          Nghĩa từ vựng
         </label>
         <button
           type="button"
@@ -44,6 +44,12 @@ export const MeaningEditor: React.FC<Props> = ({ control, register }) => {
         </button>
       </div>
 
+      {fields.length === 0 && (
+        <div style={{ fontSize: "12px", color: "#94a3b8", fontStyle: "italic", marginBottom: "8px" }}>
+          Chưa có nghĩa nào. Bấm "+ Thêm nghĩa" hoặc "Crawl" để lấy tự động.
+        </div>
+      )}
+
       {fields.map((field, index) => (
         <div
           key={field.id}
@@ -58,7 +64,7 @@ export const MeaningEditor: React.FC<Props> = ({ control, register }) => {
           <div style={{ display: "flex", gap: "8px", marginBottom: "6px" }}>
             <input
               {...register(`meanings.${index}.text` as const)}
-              placeholder="Nhập nghĩa tiếng Việt (VD: đồng bộ, hòa giải...)"
+              placeholder="Nhập nghĩa tiếng Việt hoặc định nghĩa (VD: thử, cố gắng...)"
               style={{
                 flex: 1,
                 padding: "8px 10px",
@@ -87,7 +93,7 @@ export const MeaningEditor: React.FC<Props> = ({ control, register }) => {
           </div>
           <input
             {...register(`meanings.${index}.context` as const)}
-            placeholder="Ngữ cảnh sử dụng (VD: K8s / Technical / Database...)"
+            placeholder="Ngữ cảnh / từ loại (VD: verb / danh từ / kỹ thuật...)"
             style={{
               width: "100%",
               padding: "6px 8px",
@@ -97,6 +103,11 @@ export const MeaningEditor: React.FC<Props> = ({ control, register }) => {
               color: "#64748b",
             }}
           />
+          {errors?.meanings?.[index]?.text && (
+            <div style={{ color: "#ef4444", fontSize: "12px", marginTop: "4px" }}>
+              {errors.meanings[index]?.text?.message}
+            </div>
+          )}
         </div>
       ))}
     </div>

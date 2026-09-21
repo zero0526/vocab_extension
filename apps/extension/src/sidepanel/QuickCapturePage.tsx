@@ -1,17 +1,20 @@
-import React, { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import React, { useEffect, useState, useCallback } from "react";
+import { useForm, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { vocabularyFormSchema, type VocabularyFormData } from "@vocab-extend/shared";
+import { vocabularyFormSchema, type VocabularyFormData, type VocabularyEntry } from "@vocab-extend/shared";
 import { MeaningEditor } from "../components/capture/MeaningEditor";
 import { ExampleEditor } from "../components/capture/ExampleEditor";
 import { saveVocabulary, createInitialFormData } from "../services/vocabulary.service";
 import { dictionaryClient } from "../services/dictionary/cambridge-adapter";
+import { vocabularyRepository } from "../db/vocabulary.repository";
 import { generateUUID } from "../utils/text";
+import { getLocalDateKey } from "../utils/date";
 
 export const QuickCapturePage: React.FC = () => {
   const [loadingLookup, setLoadingLookup] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [todayWords, setTodayWords] = useState<VocabularyEntry[]>([]);
 
   const form = useForm<VocabularyFormData>({
     resolver: zodResolver(vocabularyFormSchema),
@@ -33,16 +36,31 @@ export const QuickCapturePage: React.FC = () => {
   const types = watch("types");
   const audio = watch("audio");
 
+  const loadTodayWords = useCallback(async () => {
+    try {
+      const list = await vocabularyRepository.listByDate(getLocalDateKey());
+      setTodayWords(list);
+    } catch (e) {
+      console.warn("Lỗi tải danh sách từ hôm nay:", e);
+    }
+  }, []);
+
   // Load pending capture from storage or listener
   useEffect(() => {
+    loadTodayWords();
+
     if (typeof chrome !== "undefined" && chrome.storage?.local) {
       chrome.storage.local.get(["pendingCapture"], (res) => {
         if (res.pendingCapture?.word) {
           handleNewCapture(res.pendingCapture);
+          chrome.storage.local.remove(["pendingCapture"]);
         }
       });
 
-      const messageListener = (msg: { type: string; payload: { word: string; sourceUrl?: string; sourceTitle?: string } }) => {
+      const messageListener = (msg: {
+        type: string;
+        payload: { word: string; sourceUrl?: string; sourceTitle?: string };
+      }) => {
         if (msg.type === "NEW_SELECTION_CAPTURE" && msg.payload?.word) {
           handleNewCapture(msg.payload);
         }
@@ -53,7 +71,7 @@ export const QuickCapturePage: React.FC = () => {
         chrome.runtime.onMessage.removeListener(messageListener);
       };
     }
-  }, []);
+  }, [loadTodayWords]);
 
   const handleNewCapture = async (payload: { word: string; sourceUrl?: string; sourceTitle?: string }) => {
     setSaveSuccess(false);
@@ -65,7 +83,10 @@ export const QuickCapturePage: React.FC = () => {
 
   const triggerDictionaryLookup = async (wordToLookup?: string) => {
     const word = wordToLookup || currentWord;
-    if (!word?.trim()) return;
+    if (!word?.trim()) {
+      setErrorMessage("Vui lòng nhập từ trước khi bấm Crawl");
+      return;
+    }
 
     setLoadingLookup(true);
     setErrorMessage(null);
@@ -76,26 +97,19 @@ export const QuickCapturePage: React.FC = () => {
       if (dictData.pronunciations.length > 0) setValue("pronunciations", dictData.pronunciations);
       if (dictData.audio.length > 0) setValue("audio", dictData.audio);
 
-      // Pre-fill meanings if currently empty or only has empty item
-      const currentMeanings = watch("meanings");
-      if (dictData.meanings.length > 0 && (!currentMeanings.length || !currentMeanings[0].text)) {
-        setValue("meanings", [
-          {
-            id: generateUUID(),
-            text: dictData.meanings[0].text,
-            context: dictData.meanings[0].context || "",
-            source: "dictionary",
-          },
-        ]);
+      // Pre-fill meanings with definitions from dictionary
+      if (dictData.meanings.length > 0) {
+        setValue("meanings", dictData.meanings);
       }
 
       // Add Cambridge example if available
       if (dictData.examples.length > 0) {
-        const currentExamples = watch("examples");
-        setValue("examples", [...currentExamples, ...dictData.examples]);
+        setValue("examples", dictData.examples);
       }
     } catch (err) {
-      console.warn("Dictionary lookup failed or partial:", err);
+      setErrorMessage(
+        err instanceof Error ? err.message : "Không thể tải dữ liệu từ điển. Vui lòng kiểm tra lại."
+      );
     } finally {
       setLoadingLookup(false);
     }
@@ -108,9 +122,31 @@ export const QuickCapturePage: React.FC = () => {
     try {
       await saveVocabulary(data);
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3500);
+      await loadTodayWords();
+      setTimeout(() => setSaveSuccess(false), 4000);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Lỗi khi lưu từ vào IndexedDB");
+    }
+  };
+
+  const onInvalid = (fieldErrors: FieldErrors<VocabularyFormData>) => {
+    if (fieldErrors.word) {
+      setErrorMessage("Vui lòng nhập từ tiếng Anh (Word)");
+    } else {
+      setErrorMessage("Vui lòng kiểm tra lại các trường thông tin trong form");
+    }
+  };
+
+  const resetForNewWord = () => {
+    reset(createInitialFormData(""));
+    setErrorMessage(null);
+    setSaveSuccess(false);
+  };
+
+  const handleDeleteWord = async (id: string) => {
+    if (confirm("Xóa từ này khỏi bộ nhớ đệm hôm nay?")) {
+      await vocabularyRepository.delete(id);
+      await loadTodayWords();
     }
   };
 
@@ -126,7 +162,7 @@ export const QuickCapturePage: React.FC = () => {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
         <div>
           <h2 style={{ margin: 0, fontSize: "18px", color: "#1e1b4b" }}>VocabExtend</h2>
-          <span style={{ fontSize: "12px", color: "#64748b" }}>Quick Capture & Cambridge Enrich</span>
+          <span style={{ fontSize: "12px", color: "#64748b" }}>Quick Capture & Dictionary Enrich</span>
         </div>
         <button
           onClick={openDashboard}
@@ -135,17 +171,17 @@ export const QuickCapturePage: React.FC = () => {
             color: "#3730a3",
             border: "none",
             borderRadius: "6px",
-            padding: "6px 10px",
+            padding: "6px 12px",
             fontSize: "12px",
             fontWeight: 600,
             cursor: "pointer",
           }}
         >
-          Dashboard 📊
+          Dashboard 📊 ({todayWords.length})
         </button>
       </div>
 
-      <form onSubmit={handleSubmit(onSubmit)}>
+      <form onSubmit={handleSubmit(onSubmit, onInvalid)}>
         {/* Word input & Lookup button */}
         <div style={{ background: "#ffffff", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0", marginBottom: "16px" }}>
           <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>
@@ -154,14 +190,14 @@ export const QuickCapturePage: React.FC = () => {
           <div style={{ display: "flex", gap: "8px" }}>
             <input
               {...register("word")}
-              placeholder="VD: reconcile, provision..."
+              placeholder="VD: try, reconcile, scalable..."
               style={{
                 flex: 1,
                 padding: "8px 10px",
                 fontSize: "16px",
                 fontWeight: 600,
                 color: "#1e293b",
-                border: "1px solid #cbd5e1",
+                border: errors.word ? "1px solid #ef4444" : "1px solid #cbd5e1",
                 borderRadius: "6px",
               }}
             />
@@ -170,7 +206,7 @@ export const QuickCapturePage: React.FC = () => {
               disabled={loadingLookup}
               onClick={() => triggerDictionaryLookup()}
               style={{
-                padding: "8px 12px",
+                padding: "8px 14px",
                 backgroundColor: loadingLookup ? "#94a3b8" : "#4f46e5",
                 color: "#ffffff",
                 border: "none",
@@ -181,13 +217,13 @@ export const QuickCapturePage: React.FC = () => {
                 whiteSpace: "nowrap",
               }}
             >
-              {loadingLookup ? "Đang tra..." : "Crawl"}
+              {loadingLookup ? "Đang crawl..." : "🔍 Crawl"}
             </button>
           </div>
           {errors.word && <div style={{ color: "#ef4444", fontSize: "12px", marginTop: "4px" }}>{errors.word.message}</div>}
 
-          {/* Pronunciations & Types badge */}
-          {(pronunciations?.length > 0 || types?.length > 0) && (
+          {/* Pronunciations & Types badge & Audio playback */}
+          {(pronunciations?.length > 0 || types?.length > 0 || audio?.length > 0) && (
             <div style={{ marginTop: "10px", display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
               {types?.map((t, idx) => (
                 <span
@@ -250,7 +286,6 @@ export const QuickCapturePage: React.FC = () => {
 
         {/* Meanings */}
         <MeaningEditor control={control} register={register} errors={errors} />
-        {errors.meanings && <div style={{ color: "#ef4444", fontSize: "12px", marginBottom: "8px" }}>{errors.meanings.message}</div>}
 
         {/* Examples */}
         <ExampleEditor control={control} register={register} />
@@ -299,32 +334,163 @@ export const QuickCapturePage: React.FC = () => {
               borderRadius: "6px",
               fontSize: "13px",
               marginBottom: "12px",
+              border: "1px solid #fecaca",
             }}
           >
-            {errorMessage}
+            ⚠️ {errorMessage}
           </div>
         )}
 
-        {/* Submit button */}
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          style={{
-            width: "100%",
-            padding: "12px",
-            backgroundColor: isSubmitting ? "#94a3b8" : "#16a34a",
-            color: "#ffffff",
-            border: "none",
-            borderRadius: "6px",
-            fontSize: "14px",
-            fontWeight: 700,
-            cursor: isSubmitting ? "not-allowed" : "pointer",
-            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-          }}
-        >
-          {isSubmitting ? "Đang lưu..." : "💾 Lưu vào IndexedDB"}
-        </button>
+        {/* Submit button group */}
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            style={{
+              flex: 1,
+              padding: "12px",
+              backgroundColor: isSubmitting ? "#94a3b8" : "#16a34a",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: "6px",
+              fontSize: "14px",
+              fontWeight: 700,
+              cursor: isSubmitting ? "not-allowed" : "pointer",
+              boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+            }}
+          >
+            {isSubmitting ? "Đang lưu..." : "💾 Lưu vào IndexedDB"}
+          </button>
+          <button
+            type="button"
+            onClick={resetForNewWord}
+            title="Xóa form để nhập từ mới"
+            style={{
+              padding: "12px 14px",
+              backgroundColor: "#f1f5f9",
+              color: "#475569",
+              border: "1px solid #cbd5e1",
+              borderRadius: "6px",
+              fontSize: "13px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            + Từ mới
+          </button>
+        </div>
       </form>
+
+      {/* Real-time Saved Words Today Section */}
+      <div style={{ marginTop: "24px", borderTop: "1px solid #e2e8f0", paddingTop: "16px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+          <h3 style={{ margin: 0, fontSize: "14px", color: "#334155", fontWeight: 700 }}>
+            📚 Từ đã lưu hôm nay ({todayWords.length})
+          </h3>
+        </div>
+
+        {todayWords.length === 0 ? (
+          <div style={{ fontSize: "12px", color: "#94a3b8", fontStyle: "italic", textAlign: "center", padding: "12px", background: "#ffffff", borderRadius: "6px" }}>
+            Chưa có từ nào được lưu hôm nay. Hãy nhập từ và bấm "Lưu vào IndexedDB" ở trên.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {todayWords.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  background: "#ffffff",
+                  padding: "10px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid #e2e8f0",
+                  fontSize: "13px",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ fontWeight: 700, color: "#0f172a", fontSize: "14px" }}>{item.word}</span>
+                    {item.types.map((t, i) => (
+                      <span key={i} style={{ fontSize: "10px", background: "#f1f5f9", color: "#475569", padding: "1px 4px", borderRadius: "3px" }}>
+                        {t.name}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span
+                      style={{
+                        fontSize: "10px",
+                        padding: "1px 6px",
+                        borderRadius: "10px",
+                        fontWeight: 600,
+                        backgroundColor: item.status === "exported" ? "#dcfce7" : "#e0e7ff",
+                        color: item.status === "exported" ? "#15803d" : "#3730a3",
+                      }}
+                    >
+                      {item.status}
+                    </span>
+                    <button
+                      onClick={() => handleDeleteWord(item.id)}
+                      style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: "12px" }}
+                      title="Xóa"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                {/* Pronunciations & Audio */}
+                {item.pronunciations.length > 0 && (
+                  <div style={{ fontSize: "11px", color: "#6366f1", marginBottom: "4px", display: "flex", gap: "6px", alignItems: "center" }}>
+                    {item.pronunciations.map((p, i) => (
+                      <span key={i}>
+                        {p.dialect ? `[${p.dialect}] ` : ""}{p.variants.map((v) => v.ipa).join(" ")}
+                      </span>
+                    ))}
+                    {item.audio?.map((a, i) => a.url && (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => {
+                          const snd = new Audio(a.url);
+                          snd.play().catch(() => {});
+                        }}
+                        style={{
+                          border: "none",
+                          background: "#f0fdf4",
+                          color: "#166534",
+                          borderRadius: "3px",
+                          fontSize: "10px",
+                          padding: "1px 4px",
+                          cursor: "pointer"
+                        }}
+                      >
+                        🔊 {a.dialect || ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Meaning */}
+                <div style={{ color: "#334155" }}>
+                  {item.meanings.length > 0 && item.meanings[0].text ? (
+                    item.meanings.map((m, idx) => (
+                      <div key={m.id} style={{ fontSize: "12px" }}>
+                        {item.meanings.length > 1 && `${idx + 1}. `}
+                        <b>{m.text}</b>
+                      </div>
+                    ))
+                  ) : (
+                    <span style={{ fontStyle: "italic", color: "#94a3b8", fontSize: "12px" }}>
+                      (Chưa nhập nghĩa tiếng Việt)
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

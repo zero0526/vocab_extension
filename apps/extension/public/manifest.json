@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Capture vocabulary while reading, cache in IndexedDB, and export to Anki.",
   "permissions": [
+    "cookies",
     "contextMenus",
     "storage",
     "sidePanel",

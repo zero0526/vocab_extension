@@ -6,6 +6,7 @@ import { MeaningEditor } from "../components/capture/MeaningEditor";
 import { ExampleEditor } from "../components/capture/ExampleEditor";
 import { saveVocabulary, createInitialFormData } from "../services/vocabulary.service";
 import { dictionaryClient } from "../services/dictionary/cambridge-adapter";
+import { cambridgeAuth } from "../services/dictionary/cambridge-auth";
 import { vocabularyRepository } from "../db/vocabulary.repository";
 import { generateUUID } from "../utils/text";
 import { getLocalDateKey } from "../utils/date";
@@ -15,6 +16,8 @@ export const QuickCapturePage: React.FC = () => {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [todayWords, setTodayWords] = useState<VocabularyEntry[]>([]);
+  const [hasCambridgeToken, setHasCambridgeToken] = useState(false);
+  const [refreshingToken, setRefreshingToken] = useState(false);
 
   const form = useForm<VocabularyFormData>({
     resolver: zodResolver(vocabularyFormSchema),
@@ -156,10 +159,28 @@ export const QuickCapturePage: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    cambridgeAuth.hasValidToken().then(setHasCambridgeToken);
+  }, []);
+
+  const handleRefreshToken = async () => {
+    setRefreshingToken(true);
+    setErrorMessage(null);
+    try {
+      const success = await cambridgeAuth.acquireTokenInteractive();
+      setHasCambridgeToken(success);
+      if (success && currentWord?.trim()) {
+        await triggerDictionaryLookup();
+      }
+    } finally {
+      setRefreshingToken(false);
+    }
+  };
+
   return (
     <div style={{ maxWidth: "480px", margin: "0 auto", padding: "16px", minHeight: "100vh" }}>
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
         <div>
           <h2 style={{ margin: 0, fontSize: "18px", color: "#1e1b4b" }}>VocabExtend</h2>
           <span style={{ fontSize: "12px", color: "#64748b" }}>Quick Capture & Dictionary Enrich</span>
@@ -178,6 +199,42 @@ export const QuickCapturePage: React.FC = () => {
           }}
         >
           Dashboard 📊 ({todayWords.length})
+        </button>
+      </div>
+
+      {/* Cambridge Token Status Bar */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          background: hasCambridgeToken ? "#f0fdf4" : "#f8fafc",
+          border: hasCambridgeToken ? "1px solid #bbf7d0" : "1px solid #e2e8f0",
+          borderRadius: "6px",
+          padding: "6px 10px",
+          marginBottom: "14px",
+          fontSize: "12px",
+        }}
+      >
+        <span style={{ color: hasCambridgeToken ? "#166534" : "#64748b", fontWeight: 500 }}>
+          {hasCambridgeToken ? "🟢 Token Cambridge: Đã sẵn sàng" : "⚪ Token Cambridge: Chưa nạp"}
+        </span>
+        <button
+          type="button"
+          disabled={refreshingToken}
+          onClick={handleRefreshToken}
+          style={{
+            background: "#ffffff",
+            border: "1px solid #cbd5e1",
+            borderRadius: "4px",
+            padding: "3px 8px",
+            fontSize: "11px",
+            fontWeight: 600,
+            cursor: refreshingToken ? "wait" : "pointer",
+            color: "#334155",
+          }}
+        >
+          {refreshingToken ? "Đang lấy token..." : hasCambridgeToken ? "Làm mới token" : "🔑 Lấy Token"}
         </button>
       </div>
 

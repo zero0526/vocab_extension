@@ -20,6 +20,7 @@ function setupDeclarativeRules() {
             urlFilter: "||dictionary.cambridge.org",
             resourceTypes: [
               chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST,
+              chrome.declarativeNetRequest.ResourceType.MEDIA,
               chrome.declarativeNetRequest.ResourceType.OTHER,
             ],
           },

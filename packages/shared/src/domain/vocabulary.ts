@@ -29,6 +29,7 @@ export type AudioResource = {
 export type Meaning = {
   id: string;
   text: string;
+  translation?: string;
   context?: string;
   source: "user" | "dictionary";
 };

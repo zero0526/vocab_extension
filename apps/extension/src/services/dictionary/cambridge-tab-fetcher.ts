@@ -155,3 +155,150 @@ export async function fetchCambridgeHtmlViaTab(url: string, timeoutMs = 12000): 
     );
   });
 }
+
+/**
+ * Tải file audio từ Cambridge thông qua context tab thật của trình duyệt để vượt qua Cloudflare
+ * và chính sách Cross-Origin-Resource-Policy: same-origin
+ */
+export async function fetchCambridgeAudioViaTab(
+  audioUrl: string,
+  timeoutMs = 12000
+): Promise<string> {
+  if (typeof chrome === "undefined" || !chrome.tabs || !chrome.scripting) {
+    throw new Error("Chrome Tabs & Scripting API không khả dụng");
+  }
+
+  // 1. Ưu tiên 1: Tận dụng tab Cambridge sẵn có của người dùng
+  try {
+    const existingTabs = await chrome.tabs.query({ url: "*://*.cambridge.org/*" });
+    const readyTab = existingTabs.find((t) => t.id && t.status === "complete");
+    if (readyTab?.id) {
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId: readyTab.id },
+        func: async (fetchUrl) => {
+          try {
+            const r = await fetch(fetchUrl, { credentials: "include" });
+            if (!r.ok) return null;
+            const blob = await r.blob();
+            if (blob.type.includes("html") || blob.size < 500) return null;
+            return new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          } catch {
+            return null;
+          }
+        },
+        args: [audioUrl],
+      });
+
+      if (res?.result && typeof res.result === "string" && res.result.startsWith("data:audio")) {
+        return res.result;
+      }
+    }
+  } catch (e) {
+    console.info("Không thể tải audio qua tab Cambridge sẵn có:", e);
+  }
+
+  // 2. Ưu tiên 2: Mở background tab ngắn hạn (active: false)
+  return new Promise((resolve, reject) => {
+    let createdTabId: number | undefined;
+    let isResolved = false;
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+    const cleanup = () => {
+      if (isResolved) return;
+      isResolved = true;
+      clearTimeout(timeoutTimer);
+      if (pollTimer) clearInterval(pollTimer);
+
+      if (chrome.tabs.onUpdated.hasListener(onUpdatedListener)) {
+        chrome.tabs.onUpdated.removeListener(onUpdatedListener);
+      }
+      if (chrome.tabs.onRemoved.hasListener(onRemovedListener)) {
+        chrome.tabs.onRemoved.removeListener(onRemovedListener);
+      }
+
+      if (createdTabId) {
+        chrome.tabs.remove(createdTabId).catch(() => {});
+      }
+    };
+
+    const timeoutTimer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timeout khi chờ tải audio qua Cambridge tab"));
+    }, timeoutMs);
+
+    const onRemovedListener = (tabId: number) => {
+      if (tabId === createdTabId && !isResolved) {
+        cleanup();
+        reject(new Error("Tab Cambridge đã đóng trước khi tải xong audio"));
+      }
+    };
+
+    const tryDownloadInTab = async () => {
+      if (isResolved || !createdTabId) return;
+      try {
+        const [res] = await chrome.scripting.executeScript({
+          target: { tabId: createdTabId },
+          func: async (fetchUrl) => {
+            const title = document.title || "";
+            if (title.includes("Just a moment")) return "CHALLENGE";
+            try {
+              const r = await fetch(fetchUrl, { credentials: "include" });
+              if (!r.ok) return null;
+              const blob = await r.blob();
+              if (blob.type.includes("html") || blob.size < 500) return null;
+              return new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              });
+            } catch {
+              return null;
+            }
+          },
+          args: [audioUrl],
+        });
+
+        if (res?.result && typeof res.result === "string" && res.result.startsWith("data:audio")) {
+          const dataUrl = res.result;
+          cleanup();
+          resolve(dataUrl);
+        }
+      } catch {
+        // Tab not ready yet
+      }
+    };
+
+    const onUpdatedListener = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (tabId !== createdTabId || isResolved) return;
+      if (changeInfo.status === "complete") {
+        tryDownloadInTab();
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(onUpdatedListener);
+    chrome.tabs.onRemoved.addListener(onRemovedListener);
+
+    chrome.tabs.create(
+      {
+        url: "https://dictionary.cambridge.org/dictionary/english/try",
+        active: false,
+      },
+      (tab) => {
+        if (!tab?.id) {
+          cleanup();
+          reject(new Error("Không thể tạo background tab"));
+          return;
+        }
+        createdTabId = tab.id;
+        pollTimer = setInterval(tryDownloadInTab, 500);
+      }
+    );
+  });
+}
+

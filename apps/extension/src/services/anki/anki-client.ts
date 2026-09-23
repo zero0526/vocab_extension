@@ -1,6 +1,7 @@
 import type { VocabularyEntry, AnkiExport } from "@vocab-extend/shared";
 import { db } from "../../db/database";
 import { generateUUID } from "../../utils/text";
+import { downloadAudioAsBase64 } from "../../utils/audio";
 import {
   buildCardHtml,
   formatMeaningsHtml,
@@ -82,14 +83,28 @@ export class AnkiClient {
       const filename = a.filename || `vocab_${safeWord}_${dialect}.mp3`;
 
       try {
-        if (a.base64) {
-          const rawBase64 = a.base64.includes(",") ? a.base64.split(",")[1] : a.base64;
+        let base64Data = a.base64;
+
+        // Nếu chưa có Base64 và có URL -> Tiến hành tải ngầm trong extension trước
+        if (!base64Data && a.url) {
+          try {
+            const downloaded = await downloadAudioAsBase64(a.url, entry.word, a.dialect);
+            base64Data = downloaded.rawBase64;
+            a.base64 = downloaded.rawBase64;
+          } catch (dlErr) {
+            console.warn("Không thể tải audio trước khi gửi sang Anki:", dlErr);
+          }
+        }
+
+        if (base64Data) {
+          const rawBase64 = base64Data.includes(",") ? base64Data.split(",")[1] : base64Data;
           await this.invoke("storeMediaFile", {
             filename,
             data: rawBase64,
           });
           soundTags.push(`[sound:${filename}]`);
-        } else if (a.url) {
+        } else if (a.url && !a.url.includes("cambridge.org")) {
+          // Chỉ gửi URL trực tiếp cho AnkiConnect nếu KHÔNG phải Cambridge (để tránh bị Cloudflare 403 lưu file HTML)
           await this.invoke("storeMediaFile", {
             filename,
             url: a.url,

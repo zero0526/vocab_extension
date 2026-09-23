@@ -38,14 +38,22 @@ describe("anki-card-formatter", () => {
     expect(html).toContain("[sound:vocab_hello_uk.mp3]");
   });
 
-  it("formats meanings with circular number badges and context", () => {
+  it("formats meanings with circular number badges, context, and Vietnamese translation", () => {
     const html = formatMeaningsHtml([
-      { id: "1", text: "used when meeting someone", context: "greeting", source: "dictionary" },
+      {
+        id: "1",
+        text: "used when meeting someone",
+        context: "greeting",
+        source: "dictionary",
+        translation: "dùng khi gặp ai đó",
+      },
       { id: "2", text: "an expression of surprise", source: "dictionary" },
     ]);
     expect(html).toContain("vocab-meaning-index");
     expect(html).toContain("used when meeting someone");
     expect(html).toContain("greeting");
+    expect(html).toContain("vocab-meaning-vi");
+    expect(html).toContain("🇻🇳 dùng khi gặp ai đó");
     expect(html).toContain("an expression of surprise");
   });
 

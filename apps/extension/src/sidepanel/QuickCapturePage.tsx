@@ -139,7 +139,7 @@ export const QuickCapturePage: React.FC = () => {
           dictData.audio.map(async (a) => {
             if (!a.url) return a;
             try {
-              const { rawBase64 } = await downloadAudioAsBase64(a.url);
+              const { rawBase64 } = await downloadAudioAsBase64(a.url, word.trim(), a.dialect);
               const safeWord = word.trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
               const filename = `vocab_${safeWord}_${(a.dialect || "audio").toLowerCase()}.mp3`;
               return {
@@ -640,7 +640,13 @@ export const QuickCapturePage: React.FC = () => {
         )}
 
         {/* Meanings */}
-        <MeaningEditor control={control} register={register} errors={errors} />
+        <MeaningEditor
+          control={control}
+          register={register}
+          errors={errors}
+          setValue={setValue}
+          watch={watch}
+        />
 
         {/* Examples */}
         <ExampleEditor control={control} register={register} />

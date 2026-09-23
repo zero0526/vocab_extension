@@ -31,6 +31,7 @@ export const audioResourceSchema = z.object({
 export const meaningSchema = z.object({
   id: z.string(),
   text: z.string().trim(),
+  translation: z.string().optional(),
   context: z.string().optional(),
   source: z.enum(["user", "dictionary"]).default("user"),
 });

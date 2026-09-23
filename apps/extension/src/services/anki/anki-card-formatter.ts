@@ -88,6 +88,13 @@ export function formatMeaningsHtml(meanings: Meaning[]): string {
               )}</span>`
             : ""
         }
+        ${
+          m.translation
+            ? `<div class="vocab-meaning-vi" style="font-size: 13px; color: #166534; background-color: #f0fdf4; border-left: 2px solid #22c55e; padding: 3px 8px; border-radius: 0 4px 4px 0; margin-top: 4px; font-weight: 500;">🇻🇳 ${escapeHtml(
+                m.translation
+              )}</div>`
+            : ""
+        }
       </div>
     </div>`
     )
@@ -195,6 +202,7 @@ export function buildCardHtml(
   .vocab-anki-card .vocab-section-title { color: #89b4fa !important; }
   .vocab-anki-card .vocab-meaning-index { background-color: #6366f1 !important; color: #ffffff !important; }
   .vocab-anki-card .vocab-meaning-text { color: #f1f5f9 !important; }
+  .vocab-anki-card .vocab-meaning-vi { background-color: #142e1d !important; color: #86efac !important; border-left-color: #22c55e !important; }
   .vocab-anki-card .vocab-badge-context { background-color: #064e3b !important; color: #6ee7b7 !important; border-color: #047857 !important; }
   .vocab-anki-card .vocab-example-card { background-color: #181825 !important; color: #bac2de !important; border-left-color: #60a5fa !important; }
   .vocab-anki-card .vocab-example-source { color: #6c7086 !important; }

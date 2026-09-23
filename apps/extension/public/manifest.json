@@ -15,6 +15,7 @@
     "declarativeNetRequest"
   ],
   "host_permissions": [
+    "https://clients5.google.com/*",
     "https://api.dictionaryapi.dev/*",
     "https://dictionary.cambridge.org/*",
     "*://*.cambridge.org/*",

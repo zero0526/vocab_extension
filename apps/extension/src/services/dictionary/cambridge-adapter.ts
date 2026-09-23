@@ -1,8 +1,19 @@
-import type { DictionaryClient, DictionaryLookupResult } from "./types";
+import type { DictionaryClient, DictionaryLookupResult, DictionaryLookupOptions } from "./types";
 import { parseCambridgeHtml } from "./cambridge-parser";
+import { fetchCambridgeHtmlViaTab } from "./cambridge-tab-fetcher";
 import { cambridgeAuth } from "./cambridge-auth";
-import { generateUUID } from "../../utils/text";
-import type { WordType, Pronunciation, AudioResource, Meaning, Example } from "@vocab-extend/shared";
+import { generateUUID, normalizeWord } from "../../utils/text";
+
+import { vocabularyRepository } from "../../db/vocabulary.repository";
+import type {
+  WordType,
+  Pronunciation,
+  AudioResource,
+  Meaning,
+  Example,
+  VocabularyEntry,
+  AnkiExport,
+} from "@vocab-extend/shared";
 
 export interface ApiPhonetic {
   text?: string;
@@ -29,23 +40,63 @@ export interface ApiEntry {
 export class CambridgeAdapter implements DictionaryClient {
   /**
    * Fetch dictionary entry:
-   * 1. Thử cào trực tiếp từ Cambridge Dictionary dùng Cookie/Token thật trong trình duyệt (credentials: "include")
-   * 2. Nếu cookie hết hạn (HTTP 403), tự động fallback sang DictionaryAPI tốc độ cao
+   * 1. Kiểm tra từ đã lưu trong Local IndexedDB chưa. Nếu có: trả về ngay ("kéo mới ra") kèm trạng thái Anki
+   * 2. Nếu chưa lưu (hoặc options.forceRemote === true): Cào trực tiếp từ Cambridge (credentials: "include")
+   * 3. Fallback sang DictionaryAPI nếu Cambridge gặp lỗi
    */
-  async lookup(word: string): Promise<DictionaryLookupResult> {
+  async lookup(
+    word: string,
+    options?: DictionaryLookupOptions
+  ): Promise<DictionaryLookupResult> {
     const cleanWord = word.trim();
     if (!cleanWord) {
       throw new Error("Vui lòng nhập từ cần tra");
     }
 
-    const cambridgeUrl = `https://dictionary.cambridge.org/dictionary/english/${encodeURIComponent(cleanWord.toLowerCase())}`;
+    const normalized = normalizeWord(cleanWord);
+
+    // Kiểm tra thông tin đã lưu trong DB & Anki
+    let existing: VocabularyEntry | undefined;
+    let ankiExport: AnkiExport | undefined;
+    let isInAnki = false;
+
+    try {
+      existing = await vocabularyRepository.findLatestByWord(normalized);
+      if (existing) {
+        ankiExport = await vocabularyRepository.getAnkiExportByVocabularyId(existing.id);
+        isInAnki = existing.status === "exported" || Boolean(ankiExport?.noteId);
+      }
+    } catch (dbErr) {
+      console.warn("Lỗi kiểm tra từ trong IndexedDB:", dbErr);
+    }
+
+    // Nếu đã lưu trong DB và không yêu cầu cào lại (forceRemote) -> Kéo từ DB ra
+    if (!options?.forceRemote && existing) {
+      return {
+        word: existing.word,
+        types: existing.types,
+        pronunciations: existing.pronunciations,
+        audio: existing.audio,
+        meanings: existing.meanings,
+        examples: existing.examples,
+        source: existing.source || { dictionary: "Cambridge" },
+        fromDb: true,
+        existingEntry: existing,
+        isInAnki,
+        ankiNoteId: ankiExport?.noteId,
+        ankiDeckName: ankiExport?.deckName,
+      };
+    }
+
+    const cambridgeSlug = encodeURIComponent(cleanWord.toLowerCase().replace(/\s+/g, "-"));
+    const cambridgeUrl = `https://dictionary.cambridge.org/dictionary/english/${cambridgeSlug}`;
     const apiUrl = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord.toLowerCase())}`;
 
-    // 1. Thử fetch Cambridge với cookie trình duyệt (cf_clearance)
+    // 1. Thử fetch Cambridge trực tiếp với cookie trình duyệt (cf_clearance)
     try {
       const res = await fetch(cambridgeUrl, {
         method: "GET",
-        credentials: "include", // Tự động gửi cookie cf_clearance từ kho cookie của Chrome
+        credentials: "include", // Tự động gửi cookie từ kho cookie của Chrome
         headers: {
           Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
@@ -62,23 +113,61 @@ export class CambridgeAdapter implements DictionaryClient {
         ) {
           const parsed = parseCambridgeHtml(htmlText, cleanWord);
           if (parsed.meanings.length > 0 || parsed.pronunciations.length > 0) {
+            if (existing) {
+              parsed.existingEntry = existing;
+              parsed.isInAnki = isInAnki;
+              parsed.ankiNoteId = ankiExport?.noteId;
+              parsed.ankiDeckName = ankiExport?.deckName;
+            }
             return parsed;
           }
         }
       } else if (res.status === 403) {
-        console.warn("Cambridge trả về 403 (cookie cf_clearance cần được làm mới).");
+        console.info("Cambridge direct fetch bị Cloudflare chặn (403), chuyển sang V8 Tab Engine...");
       }
     } catch (err) {
-      console.warn("Không thể fetch trực tiếp Cambridge:", err);
+      console.info("Không thể fetch trực tiếp Cambridge, thử qua V8 Tab Engine:", err);
     }
 
-    // 2. Fallback: Dictionary API (Đảm bảo luôn có từ loại, phát âm MP3, định nghĩa ngay lập tức)
+    // 2. Thử giải Cloudflare qua Tab thật của Chrome (V8 Tab Engine ngầm)
+    if (typeof chrome !== "undefined" && chrome.tabs && chrome.scripting) {
+      try {
+        const tabHtml = await fetchCambridgeHtmlViaTab(cambridgeUrl);
+        if (
+          tabHtml.includes("headword") ||
+          tabHtml.includes("pron-block") ||
+          tabHtml.includes("pr dictionary")
+        ) {
+          const parsed = parseCambridgeHtml(tabHtml, cleanWord);
+          if (parsed.meanings.length > 0 || parsed.pronunciations.length > 0) {
+            if (existing) {
+              parsed.existingEntry = existing;
+              parsed.isInAnki = isInAnki;
+              parsed.ankiNoteId = ankiExport?.noteId;
+              parsed.ankiDeckName = ankiExport?.deckName;
+            }
+            return parsed;
+          }
+        }
+      } catch (tabErr) {
+        console.info("Không thể cào qua V8 tab engine, chuyển sang DictionaryAPI fallback:", tabErr);
+      }
+    }
+
+    // 3. Fallback: Dictionary API (Đảm bảo luôn có từ loại, phát âm MP3, định nghĩa ngay lập tức)
     try {
       const res = await fetch(apiUrl);
       if (res.ok) {
         const data = (await res.json()) as ApiEntry[];
         if (Array.isArray(data) && data.length > 0) {
-          return this.parseApiResponse(data[0], cleanWord, cambridgeUrl);
+          const apiResult = this.parseApiResponse(data[0], cleanWord, cambridgeUrl);
+          if (existing) {
+            apiResult.existingEntry = existing;
+            apiResult.isInAnki = isInAnki;
+            apiResult.ankiNoteId = ankiExport?.noteId;
+            apiResult.ankiDeckName = ankiExport?.deckName;
+          }
+          return apiResult;
         }
       }
     } catch (err) {

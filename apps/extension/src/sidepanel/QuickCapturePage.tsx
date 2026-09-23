@@ -4,21 +4,35 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { vocabularyFormSchema, type VocabularyFormData, type VocabularyEntry } from "@vocab-extend/shared";
 import { MeaningEditor } from "../components/capture/MeaningEditor";
 import { ExampleEditor } from "../components/capture/ExampleEditor";
-import { saveVocabulary, createInitialFormData } from "../services/vocabulary.service";
+import { saveVocabulary, updateVocabulary, createInitialFormData } from "../services/vocabulary.service";
 import { dictionaryClient } from "../services/dictionary/cambridge-adapter";
 import { cambridgeAuth } from "../services/dictionary/cambridge-auth";
+import { ankiClient } from "../services/anki/anki-client";
 import { vocabularyRepository } from "../db/vocabulary.repository";
 import { generateUUID } from "../utils/text";
 import { getLocalDateKey } from "../utils/date";
 import { downloadAudioAsBase64, playAudioResource } from "../utils/audio";
 
+
 export const QuickCapturePage: React.FC = () => {
   const [loadingLookup, setLoadingLookup] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [todayWords, setTodayWords] = useState<VocabularyEntry[]>([]);
   const [hasCambridgeToken, setHasCambridgeToken] = useState(false);
   const [refreshingToken, setRefreshingToken] = useState(false);
+  const [updatingAction, setUpdatingAction] = useState(false);
+
+  // Trạng thái từ đã tồn tại trong DB / Anki
+  const [duplicateInfo, setDuplicateInfo] = useState<{
+    existingEntry: VocabularyEntry;
+    isInAnki: boolean;
+    ankiNoteId?: number;
+    ankiDeckName?: string;
+    fromDb: boolean;
+  } | null>(null);
+
 
   const form = useForm<VocabularyFormData>({
     resolver: zodResolver(vocabularyFormSchema),
@@ -78,14 +92,15 @@ export const QuickCapturePage: React.FC = () => {
   }, [loadTodayWords]);
 
   const handleNewCapture = async (payload: { word: string; sourceUrl?: string; sourceTitle?: string }) => {
-    setSaveSuccess(false);
+    setSaveSuccessMessage(null);
     setErrorMessage(null);
+    setDuplicateInfo(null);
     const initial = createInitialFormData(payload.word, payload.sourceUrl, payload.sourceTitle);
     reset(initial);
     await triggerDictionaryLookup(payload.word);
   };
 
-  const triggerDictionaryLookup = async (wordToLookup?: string) => {
+  const triggerDictionaryLookup = async (wordToLookup?: string, forceRemote = false) => {
     const word = wordToLookup || currentWord;
     if (!word?.trim()) {
       setErrorMessage("Vui lòng nhập từ trước khi bấm Crawl");
@@ -96,18 +111,24 @@ export const QuickCapturePage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      const dictData = await dictionaryClient.lookup(word.trim());
+      const dictData = await dictionaryClient.lookup(word.trim(), { forceRemote });
+
       if (dictData.types.length > 0) setValue("types", dictData.types);
       if (dictData.pronunciations.length > 0) setValue("pronunciations", dictData.pronunciations);
 
-      // Pre-fill meanings with definitions from dictionary
+      // Điền meanings
       if (dictData.meanings.length > 0) {
         setValue("meanings", dictData.meanings);
       }
 
-      // Add examples if available
+      // Điền examples
       if (dictData.examples.length > 0) {
         setValue("examples", dictData.examples);
+      }
+
+      // Điền memory hint nếu bản ghi cũ đã có
+      if (dictData.existingEntry?.memory) {
+        setValue("memory", dictData.existingEntry.memory);
       }
 
       // Tải ngầm file audio để lưu vào IndexedDB và nghe offline ngay lập tức
@@ -134,6 +155,19 @@ export const QuickCapturePage: React.FC = () => {
           setValue("audio", downloaded);
         }).catch(() => {});
       }
+
+      // Xử lý phát hiện từ đã có trong DB
+      if (dictData.existingEntry) {
+        setDuplicateInfo({
+          existingEntry: dictData.existingEntry,
+          isInAnki: Boolean(dictData.isInAnki),
+          ankiNoteId: dictData.ankiNoteId,
+          ankiDeckName: dictData.ankiDeckName,
+          fromDb: Boolean(dictData.fromDb),
+        });
+      } else {
+        setDuplicateInfo(null);
+      }
     } catch (err) {
       setErrorMessage(
         err instanceof Error ? err.message : "Không thể tải dữ liệu từ điển. Vui lòng kiểm tra lại."
@@ -143,9 +177,104 @@ export const QuickCapturePage: React.FC = () => {
     }
   };
 
-  const onSubmit = async (data: VocabularyFormData) => {
+  /**
+   * Cập nhật bản ghi hiện tại trong DB, đồng thời cập nhật thẻ trên Anki (nếu có)
+   */
+  const handleUpdate = async () => {
+    if (!duplicateInfo) return;
     setErrorMessage(null);
-    setSaveSuccess(false);
+    setSaveSuccessMessage(null);
+
+    const isValid = await form.trigger();
+    if (!isValid) {
+      setErrorMessage("Vui lòng kiểm tra lại các trường thông tin trong form");
+      return;
+    }
+
+    setUpdatingAction(true);
+    const data = form.getValues();
+
+    try {
+      const updated = await updateVocabulary(duplicateInfo.existingEntry.id, data);
+
+      let ankiSuccessMsg = "";
+      if (duplicateInfo.isInAnki && duplicateInfo.ankiNoteId) {
+        try {
+          await ankiClient.updateNote(duplicateInfo.ankiNoteId, updated);
+          ankiSuccessMsg = ` và thẻ trên Anki (Note #${duplicateInfo.ankiNoteId})`;
+        } catch (ankiErr) {
+          console.warn("Không thể cập nhật trực tiếp trên Anki:", ankiErr);
+          setErrorMessage(
+            `Đã cập nhật DB nhưng không thể đồng bộ sang Anki: ${ankiErr instanceof Error ? ankiErr.message : String(ankiErr)}`
+          );
+        }
+      }
+
+      setDuplicateInfo(null);
+      reset(createInitialFormData(""));
+      setSaveSuccessMessage(`✓ Đã cập nhật từ vào Local Cache${ankiSuccessMsg} thành công!`);
+      await loadTodayWords();
+      setTimeout(() => setSaveSuccessMessage(null), 4000);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Lỗi khi cập nhật từ");
+    } finally {
+      setUpdatingAction(false);
+    }
+  };
+
+  /**
+   * Lưu thành một bản ghi mới độc lập (không ghi đè bản ghi cũ)
+   */
+  const handleSaveAsNew = async () => {
+    setErrorMessage(null);
+    setSaveSuccessMessage(null);
+
+    const isValid = await form.trigger();
+    if (!isValid) {
+      setErrorMessage("Vui lòng kiểm tra lại các trường thông tin trong form");
+      return;
+    }
+
+    setUpdatingAction(true);
+    const data = form.getValues();
+
+    try {
+      await saveVocabulary(data, { forceNew: true });
+      setDuplicateInfo(null);
+      reset(createInitialFormData(""));
+      setSaveSuccessMessage("✓ Đã lưu thành 1 bản ghi mới độc lập thành công!");
+      await loadTodayWords();
+      setTimeout(() => setSaveSuccessMessage(null), 4000);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Lỗi khi lưu bản ghi mới");
+    } finally {
+      setUpdatingAction(false);
+    }
+  };
+
+  /**
+   * Bỏ qua cảnh báo trùng
+   */
+  const handleSkip = () => {
+    setDuplicateInfo(null);
+  };
+
+  /**
+   * Cào lại dữ liệu từ Cambridge / DictionaryAPI trực tuyến
+   */
+  const handleForceReCrawl = async () => {
+    await triggerDictionaryLookup(undefined, true);
+  };
+
+  const onSubmit = async (data: VocabularyFormData) => {
+    // Nếu đang ở trạng thái phát hiện từ trùng và người dùng nhấn nút submit chính
+    if (duplicateInfo) {
+      await handleUpdate();
+      return;
+    }
+
+    setErrorMessage(null);
+    setSaveSuccessMessage(null);
 
     try {
       await saveVocabulary(data);
@@ -158,9 +287,9 @@ export const QuickCapturePage: React.FC = () => {
       // Dọn sạch form để sẵn sàng bắt từ tiếp theo
       reset(createInitialFormData(""));
 
-      setSaveSuccess(true);
+      setSaveSuccessMessage("✓ Đã lưu từ vào Local Cache (IndexedDB) thành công!");
       await loadTodayWords();
-      setTimeout(() => setSaveSuccess(false), 4000);
+      setTimeout(() => setSaveSuccessMessage(null), 4000);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Lỗi khi lưu từ vào IndexedDB");
     }
@@ -177,8 +306,10 @@ export const QuickCapturePage: React.FC = () => {
   const resetForNewWord = () => {
     reset(createInitialFormData(""));
     setErrorMessage(null);
-    setSaveSuccess(false);
+    setSaveSuccessMessage(null);
+    setDuplicateInfo(null);
   };
+
 
   const handleDeleteWord = async (id: string) => {
     if (confirm("Xóa từ này khỏi bộ nhớ đệm hôm nay?")) {
@@ -372,6 +503,142 @@ export const QuickCapturePage: React.FC = () => {
           )}
         </div>
 
+        {/* Duplicate / Existing in DB & Anki Banner */}
+        {duplicateInfo && (
+          <div
+            style={{
+              background: "#fffbeb",
+              border: "1px solid #fcd34d",
+              borderRadius: "8px",
+              padding: "12px",
+              marginBottom: "16px",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: "13px", color: "#92400e", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span>⚠️ Từ này đã tồn tại trong CSDL</span>
+                  {duplicateInfo.fromDb && (
+                    <span style={{ fontSize: "10px", background: "#fef3c7", color: "#b45309", padding: "1px 6px", borderRadius: "4px", border: "1px solid #fde68a" }}>
+                      Đã kéo từ DB ra
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: "11px", color: "#78350f", marginTop: "2px" }}>
+                  Lưu lúc: {new Date(duplicateInfo.existingEntry.createdAt).toLocaleDateString("vi-VN")}
+                  {duplicateInfo.existingEntry.meanings.length > 0 && ` • ${duplicateInfo.existingEntry.meanings.length} nghĩa`}
+                </div>
+              </div>
+
+              {/* Trạng thái Anki */}
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  padding: "3px 8px",
+                  borderRadius: "12px",
+                  backgroundColor: duplicateInfo.isInAnki ? "#dcfce7" : "#f1f5f9",
+                  color: duplicateInfo.isInAnki ? "#15803d" : "#64748b",
+                  border: duplicateInfo.isInAnki ? "1px solid #86efac" : "1px solid #cbd5e1",
+                  whiteSpace: "nowrap",
+                }}
+                title={duplicateInfo.isInAnki ? `Deck: ${duplicateInfo.ankiDeckName || "Anki"} | Note #${duplicateInfo.ankiNoteId || ""}` : "Chưa xuất sang Anki"}
+              >
+                {duplicateInfo.isInAnki
+                  ? `🟢 Đã có trong Anki${duplicateInfo.ankiNoteId ? ` (#${duplicateInfo.ankiNoteId})` : ""}`
+                  : "⚪ Chưa có trong Anki"}
+              </span>
+            </div>
+
+            <div style={{ fontSize: "12px", color: "#451a03", marginBottom: "10px" }}>
+              Từ này đã được lưu trước đó. Bạn có thể cập nhật nội dung cũ (đồng bộ Anki), thêm một bản ghi mới, hoặc bỏ qua:
+            </div>
+
+            {/* 3 Lựa chọn hành động: Cập nhật / Thêm bản ghi mới / Bỏ qua */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button
+                type="button"
+                disabled={updatingAction}
+                onClick={handleUpdate}
+                style={{
+                  flex: "1 1 auto",
+                  padding: "7px 12px",
+                  background: "#2563eb",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: "5px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: updatingAction ? "wait" : "pointer",
+                }}
+                title="Cập nhật bản ghi trong DB và đồng bộ lên Anki (nếu đã có thẻ)"
+              >
+                {updatingAction ? "Đang cập nhật..." : duplicateInfo.isInAnki ? "🔄 Cập nhật (DB & Anki)" : "🔄 Cập nhật DB"}
+              </button>
+
+              <button
+                type="button"
+                disabled={updatingAction}
+                onClick={handleSaveAsNew}
+                style={{
+                  flex: "1 1 auto",
+                  padding: "7px 12px",
+                  background: "#16a34a",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: "5px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: updatingAction ? "wait" : "pointer",
+                }}
+                title="Lưu thành bản ghi mới độc lập"
+              >
+                ➕ Thêm bản ghi mới
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSkip}
+                style={{
+                  padding: "7px 12px",
+                  background: "#ffffff",
+                  color: "#475569",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "5px",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+                title="Bỏ qua cảnh báo trùng"
+              >
+                Bỏ qua
+              </button>
+
+              {duplicateInfo.fromDb && (
+                <button
+                  type="button"
+                  disabled={loadingLookup}
+                  onClick={handleForceReCrawl}
+                  style={{
+                    padding: "7px 10px",
+                    background: "#f8fafc",
+                    color: "#6366f1",
+                    border: "1px dashed #a5b4fc",
+                    borderRadius: "5px",
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    cursor: loadingLookup ? "wait" : "pointer",
+                  }}
+                  title="Bỏ qua dữ liệu trong DB và cào mới lại từ Cambridge trực tuyến"
+                >
+                  🌐 Cào lại Cambridge
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Meanings */}
         <MeaningEditor control={control} register={register} errors={errors} />
 
@@ -397,7 +664,7 @@ export const QuickCapturePage: React.FC = () => {
         </div>
 
         {/* Feedback messages */}
-        {saveSuccess && (
+        {saveSuccessMessage && (
           <div
             style={{
               padding: "10px",
@@ -409,7 +676,7 @@ export const QuickCapturePage: React.FC = () => {
               fontWeight: 500,
             }}
           >
-            ✓ Đã lưu từ vào Local Cache (IndexedDB) thành công!
+            {saveSuccessMessage}
           </div>
         )}
 
@@ -433,21 +700,25 @@ export const QuickCapturePage: React.FC = () => {
         <div style={{ display: "flex", gap: "8px" }}>
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || updatingAction}
             style={{
               flex: 1,
               padding: "12px",
-              backgroundColor: isSubmitting ? "#94a3b8" : "#16a34a",
+              backgroundColor: (isSubmitting || updatingAction) ? "#94a3b8" : duplicateInfo ? "#2563eb" : "#16a34a",
               color: "#ffffff",
               border: "none",
               borderRadius: "6px",
               fontSize: "14px",
               fontWeight: 700,
-              cursor: isSubmitting ? "not-allowed" : "pointer",
+              cursor: (isSubmitting || updatingAction) ? "not-allowed" : "pointer",
               boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
             }}
           >
-            {isSubmitting ? "Đang lưu..." : "💾 Lưu vào IndexedDB"}
+            {(isSubmitting || updatingAction)
+              ? "Đang lưu..."
+              : duplicateInfo
+                ? (duplicateInfo.isInAnki ? "🔄 Cập nhật (DB & Anki)" : "🔄 Cập nhật từ vựng")
+                : "💾 Lưu vào IndexedDB"}
           </button>
           <button
             type="button"

@@ -1,6 +1,14 @@
 import type { VocabularyEntry, AnkiExport } from "@vocab-extend/shared";
 import { db } from "../../db/database";
 import { generateUUID } from "../../utils/text";
+import {
+  buildCardHtml,
+  formatMeaningsHtml,
+  formatExamplesHtml,
+  formatPronunciationsHtml,
+  formatWordTypesHtml,
+  formatMemoryHtml,
+} from "./anki-card-formatter";
 
 export interface AnkiConnectResponse<T = unknown> {
   result: T;
@@ -97,37 +105,19 @@ export class AnkiClient {
   }
 
   /**
-   * Convert VocabularyEntry to standard Anki Note fields
+   * Convert VocabularyEntry to standard Anki Note fields with rich HTML styling
    */
   buildNoteFields(
     entry: VocabularyEntry,
     availableFields: string[],
     soundTags: string[] = []
   ): Record<string, string> {
-    const pos = entry.types.map((t) => t.name).join(", ");
-    const ipa = entry.pronunciations
-      .map((p) => `${p.dialect ? `[${p.dialect}] ` : ""}${p.variants.map((v) => v.ipa).join(" ")}`)
-      .join(" · ");
-
-    const meaningsHtml = entry.meanings
-      .map((m, i) => `<div>${entry.meanings.length > 1 ? `${i + 1}. ` : ""}<b>${m.text}</b>${m.context ? ` <i>(${m.context})</i>` : ""}</div>`)
-      .join("");
-
-    const examplesHtml = entry.examples
-      .map((e) => `<div>• <i>${e.sentence}</i>${e.source ? ` <small>[${e.source}]</small>` : ""}</div>`)
-      .join("");
-
-    const memoryHtml = entry.memory ? `<div>💡 <i>${entry.memory}</i></div>` : "";
-    const soundTagsHtml = soundTags.length > 0 ? `<div>${soundTags.join(" ")}</div>` : "";
-
-    const fullBack = [
-      ipa ? `<div style="color: #6366f1;">${ipa}</div>` : "",
-      pos ? `<div style="color: #64748b; font-style: italic;">${pos}</div>` : "",
-      soundTagsHtml,
-      meaningsHtml ? `<div style="margin-top: 8px;">${meaningsHtml}</div>` : "",
-      examplesHtml ? `<div style="margin-top: 8px;">${examplesHtml}</div>` : "",
-      memoryHtml ? `<div style="margin-top: 8px;">${memoryHtml}</div>` : "",
-    ].filter(Boolean).join("");
+    const fullBack = buildCardHtml(entry, soundTags);
+    const meaningsHtml = formatMeaningsHtml(entry.meanings);
+    const examplesHtml = formatExamplesHtml(entry.examples);
+    const ipaHtml = formatPronunciationsHtml(entry.pronunciations, soundTags);
+    const posHtml = formatWordTypesHtml(entry.types);
+    const memoryHtml = formatMemoryHtml(entry.memory);
 
     const fieldMap: Record<string, string> = {};
 
@@ -136,13 +126,15 @@ export class AnkiClient {
       fieldMap["Front"] = entry.word;
       fieldMap["Back"] = fullBack;
     } else {
-      // Fallback matching
+      // Fallback matching for customized or multi-field models
       for (const f of availableFields) {
         const lower = f.toLowerCase();
         if (lower.includes("word") || lower.includes("front")) fieldMap[f] = entry.word;
         else if (lower.includes("meaning") || lower.includes("back")) fieldMap[f] = fullBack;
-        else if (lower.includes("ipa") || lower.includes("phonetic")) fieldMap[f] = ipa;
+        else if (lower.includes("ipa") || lower.includes("phonetic") || lower.includes("pronunciation")) fieldMap[f] = ipaHtml;
         else if (lower.includes("example")) fieldMap[f] = examplesHtml;
+        else if (lower.includes("pos") || lower.includes("part of speech") || lower.includes("type")) fieldMap[f] = posHtml;
+        else if (lower.includes("memory") || lower.includes("hint") || lower.includes("note")) fieldMap[f] = memoryHtml;
         else if (lower.includes("audio") || lower.includes("sound")) fieldMap[f] = soundTags.join(" ");
         else fieldMap[f] = "";
       }
@@ -151,7 +143,7 @@ export class AnkiClient {
     // Gán trường Audio riêng nếu model có hỗ trợ
     const dedicatedAudioField = availableFields.find((f) => {
       const lower = f.toLowerCase();
-      return lower.includes("audio") || lower.includes("sound") || lower.includes("pronunciation");
+      return lower.includes("audio") || lower.includes("sound");
     });
     if (dedicatedAudioField && soundTags.length > 0) {
       fieldMap[dedicatedAudioField] = soundTags.join(" ");
@@ -218,6 +210,79 @@ export class AnkiClient {
 
     return results;
   }
+
+  /**
+   * Lấy thông tin chi tiết của note trên Anki (bao gồm modelName, fields)
+   */
+  async getNoteInfo(noteId: number): Promise<{ noteId: number; modelName: string; fields: Record<string, { value: string }> } | null> {
+    try {
+      const info = await this.invoke<Array<{ noteId: number; modelName: string; fields: Record<string, { value: string }> }>>("notesInfo", {
+        notes: [noteId],
+      });
+      if (Array.isArray(info) && info.length > 0 && info[0].noteId) {
+        return info[0];
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Kiểm tra note có tồn tại trên Anki hay không
+   */
+  async checkNoteExists(noteId: number): Promise<boolean> {
+    const info = await this.getNoteInfo(noteId);
+    return info !== null;
+  }
+
+  /**
+   * Tìm danh sách Note ID theo từ khóa trên Anki
+   */
+  async findNotesByWord(word: string, deckName?: string): Promise<number[]> {
+    try {
+      const cleanWord = word.trim().replace(/"/g, '\\"');
+      const query = deckName ? `deck:"${deckName}" "${cleanWord}"` : `"${cleanWord}"`;
+      return await this.invoke<number[]>("findNotes", { query });
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Cập nhật các trường thông tin của thẻ đã tồn tại trong Anki
+   */
+  async updateNote(noteId: number, entry: VocabularyEntry): Promise<void> {
+    const noteInfo = await this.getNoteInfo(noteId);
+    const modelName = noteInfo?.modelName || "Basic";
+
+    const availableFields = await this.getModelFieldNames(modelName);
+    const soundTags = await this.uploadMediaFilesForEntry(entry);
+    const fields = this.buildNoteFields(entry, availableFields, soundTags);
+
+    await this.invoke("updateNoteFields", {
+      note: {
+        id: noteId,
+        fields,
+      },
+    });
+
+    // Cập nhật trạng thái trong local DB
+    const existingExport = await db.ankiExports.where("vocabularyId").equals(entry.id).first();
+    if (existingExport) {
+      await db.ankiExports.update(existingExport.id, {
+        noteId,
+        status: "success",
+        exportedAt: new Date().toISOString(),
+      });
+    }
+
+    await db.vocabulary.update(entry.id, {
+      status: "exported",
+      updatedAt: new Date().toISOString(),
+    });
+  }
 }
+
 
 export const ankiClient = new AnkiClient();

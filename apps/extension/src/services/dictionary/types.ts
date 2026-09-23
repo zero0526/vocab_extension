@@ -5,7 +5,12 @@ import type {
   Meaning,
   Example,
   DictionarySource,
+  VocabularyEntry,
 } from "@vocab-extend/shared";
+
+export interface DictionaryLookupOptions {
+  forceRemote?: boolean;
+}
 
 export interface DictionaryLookupResult {
   word: string;
@@ -15,8 +20,17 @@ export interface DictionaryLookupResult {
   meanings: Meaning[];
   examples: Example[];
   source: DictionarySource;
+  fromDb?: boolean;
+  existingEntry?: VocabularyEntry;
+  isInAnki?: boolean;
+  ankiNoteId?: number;
+  ankiDeckName?: string;
 }
 
 export interface DictionaryClient {
-  lookup(word: string): Promise<DictionaryLookupResult>;
+  lookup(
+    word: string,
+    options?: DictionaryLookupOptions
+  ): Promise<DictionaryLookupResult>;
 }
+

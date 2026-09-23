@@ -1,5 +1,5 @@
 import { db } from "./database";
-import type { VocabularyEntry, VocabularyStatus } from "@vocab-extend/shared";
+import type { VocabularyEntry, VocabularyStatus, AnkiExport } from "@vocab-extend/shared";
 
 export class VocabularyRepository {
   async getById(id: string): Promise<VocabularyEntry | undefined> {
@@ -21,6 +21,19 @@ export class VocabularyRepository {
       .where("normalizedWord")
       .equals(normalizedWord)
       .toArray();
+  }
+
+  async findLatestByWord(normalizedWord: string): Promise<VocabularyEntry | undefined> {
+    const list = await this.findByWord(normalizedWord);
+    if (list.length === 0) return undefined;
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  }
+
+  async getAnkiExportByVocabularyId(vocabularyId: string): Promise<AnkiExport | undefined> {
+    return db.ankiExports
+      .where("vocabularyId")
+      .equals(vocabularyId)
+      .first();
   }
 
   async listByDate(dateKey: string): Promise<VocabularyEntry[]> {

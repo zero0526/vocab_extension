@@ -18,6 +18,7 @@ function setupDeclarativeRules() {
           },
           condition: {
             urlFilter: "||dictionary.cambridge.org",
+            initiatorDomains: [chrome.runtime.id],
             resourceTypes: [
               chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST,
               chrome.declarativeNetRequest.ResourceType.MEDIA,
